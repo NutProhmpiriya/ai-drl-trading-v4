@@ -1,6 +1,7 @@
 import MetaTrader5 as mt5
 import pandas as pd
 import numpy as np
+import os
 from datetime import datetime, timedelta
 import pytz
 
@@ -9,9 +10,19 @@ class DataProcessor:
         if not mt5.initialize():
             print("Initialize() failed")
             mt5.shutdown()
+        
+        # Create data directory if it doesn't exist
+        self.data_dir = "data"
+        os.makedirs(self.data_dir, exist_ok=True)
 
-    def fetch_data(self, symbol: str, timeframe: int, start_date: datetime, end_date: datetime) -> pd.DataFrame:
+    def fetch_data(self, symbol: str, timeframe: str, start_date: datetime, end_date: datetime) -> pd.DataFrame:
         """Fetch data from MT5 and calculate technical indicators"""
+        
+        # Try to load from cache first
+        df = self._load_from_cache(symbol, timeframe, start_date, end_date)
+        if df is not None:
+            print(f"Loaded data from cache for {symbol} {timeframe}m from {start_date.date()} to {end_date.date()}")
+            return df
         
         # Convert timeframe string to MT5 timeframe
         timeframe_dict = {
@@ -48,7 +59,31 @@ class DataProcessor:
         # Calculate technical indicators
         df = self._calculate_indicators(df)
         
+        # Save to cache
+        self._save_to_cache(df, symbol, timeframe, start_date, end_date)
+        print(f"Fetched and cached data for {symbol} {timeframe}m from {start_date.date()} to {end_date.date()}")
+        
         return df
+    
+    def _get_cache_filename(self, symbol: str, timeframe: str, start_date: datetime, end_date: datetime) -> str:
+        """Generate cache filename based on parameters"""
+        return os.path.join(self.data_dir, 
+                          f"{symbol}_{timeframe}m_{start_date.strftime('%Y%m%d')}_{end_date.strftime('%Y%m%d')}.csv")
+    
+    def _save_to_cache(self, df: pd.DataFrame, symbol: str, timeframe: str, 
+                      start_date: datetime, end_date: datetime):
+        """Save data to cache file"""
+        cache_file = self._get_cache_filename(symbol, timeframe, start_date, end_date)
+        df.to_csv(cache_file)
+    
+    def _load_from_cache(self, symbol: str, timeframe: str, 
+                        start_date: datetime, end_date: datetime) -> pd.DataFrame:
+        """Try to load data from cache file"""
+        cache_file = self._get_cache_filename(symbol, timeframe, start_date, end_date)
+        if os.path.exists(cache_file):
+            df = pd.read_csv(cache_file, index_col=0, parse_dates=True)
+            return df
+        return None
     
     def _calculate_indicators(self, df: pd.DataFrame) -> pd.DataFrame:
         """Calculate technical indicators"""
@@ -99,12 +134,12 @@ class DataProcessor:
     @staticmethod
     def _calculate_atr(high: pd.Series, low: pd.Series, close: pd.Series, period: int) -> pd.Series:
         """Calculate Average True Range"""
-        tr1 = high - low
-        tr2 = abs(high - close.shift())
-        tr3 = abs(low - close.shift())
-        
-        tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
-        return tr.rolling(window=period).mean()
+        tr = pd.DataFrame()
+        tr['h-l'] = high - low
+        tr['h-pc'] = abs(high - close.shift(1))
+        tr['l-pc'] = abs(low - close.shift(1))
+        tr['tr'] = tr[['h-l', 'h-pc', 'l-pc']].max(axis=1)
+        return tr['tr'].rolling(period).mean()
     
     @staticmethod
     def _calculate_obv(close: pd.Series, volume: pd.Series) -> pd.Series:
