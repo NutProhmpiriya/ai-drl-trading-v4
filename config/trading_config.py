@@ -2,6 +2,8 @@
 Configuration settings for the trading environment and model training
 """
 
+import os
+
 # Trading parameters
 TRADING_PARAMS = {
     'symbol': 'USDJPY',
@@ -19,27 +21,27 @@ TRAINING_PARAMS = {
     'learning_rate': 0.0003,
     'batch_size': 64,
     'n_steps': 2048,
+    'n_epochs': 10,
     'gamma': 0.99,
-    'policy': 'MlpPolicy',
+    'reward_threshold': 1000,  # Stop training if mean reward reaches this threshold
+    'eval_freq': 10000,  # Evaluate model every n steps
     'verbose': 1
 }
 
 # Data parameters
-DATA_PARAMS = {
-    'lookback_window': 100,  # Number of candles to look back
-    'features': [
-        'Open', 'High', 'Low', 'Close', 'Volume',
-        'EMA9', 'EMA21', 'EMA50', 'RSI', 'ATR', 'OBV'
-    ],
-}
+SYMBOL = TRADING_PARAMS['symbol']
+TIMEFRAME = TRADING_PARAMS['timeframe']
+TRAINING_YEAR = 2023
+TESTING_YEAR = 2024
 
 # Paths
-PATHS = {
-    'data_dir': 'data',
-    'models_dir': 'models',
-    'logs_dir': 'logs',
-    'results_dir': 'results'
-}
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+DATA_PATH = os.path.join(BASE_DIR, 'data')
+MODEL_PATH = os.path.join(BASE_DIR, 'models', f'ppo_{SYMBOL}_{TIMEFRAME}m.zip')
+
+# Create directories if they don't exist
+for path in [DATA_PATH, os.path.dirname(MODEL_PATH)]:
+    os.makedirs(path, exist_ok=True)
 
 # Backtesting parameters
 BACKTEST_PARAMS = {

@@ -1,4 +1,4 @@
-gymnasium==0.29.1
+gymnasium==1.0.0
 stable-baselines3==2.4.0
 MetaTrader5==5.0.45
 pandas==2.0.3

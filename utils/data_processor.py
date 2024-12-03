@@ -1,9 +1,12 @@
-import MetaTrader5 as mt5
+import os
+import logging
 import pandas as pd
 import numpy as np
-import os
+import MetaTrader5 as mt5
 from datetime import datetime, timedelta
-import pytz
+from typing import Optional
+
+logger = logging.getLogger(__name__)
 
 class DataProcessor:
     def __init__(self):
@@ -15,148 +18,107 @@ class DataProcessor:
         self.data_dir = "data"
         os.makedirs(self.data_dir, exist_ok=True)
 
-    def fetch_data(self, symbol: str, timeframe: str, start_date: datetime, end_date: datetime) -> pd.DataFrame:
-        """Fetch data from MT5 and calculate technical indicators"""
+    def get_or_cache_data(self, symbol: str, timeframe: str, year: int) -> Optional[pd.DataFrame]:
+        """
+        Get data from cache if available, otherwise fetch from MT5 and cache it
+        """
+        # Define cache file path
+        cache_file = os.path.join(self.data_dir, f"{symbol}_{timeframe}m_{year}_data.csv")
         
-        # Try to load from cache first
-        df = self._load_from_cache(symbol, timeframe, start_date, end_date)
-        if df is not None:
-            print(f"Loaded data from cache for {symbol} {timeframe}m from {start_date.date()} to {end_date.date()}")
+        # Try to load from cache
+        if os.path.exists(cache_file):
+            logger.info(f"Loading cached data from {cache_file}")
+            df = pd.read_csv(cache_file)
+            df['time'] = pd.to_datetime(df['time'])
+            df.set_index('time', inplace=True)
             return df
         
-        # Convert timeframe string to MT5 timeframe
-        timeframe_dict = {
-            '1': mt5.TIMEFRAME_M1,
-            '5': mt5.TIMEFRAME_M5,
-            '15': mt5.TIMEFRAME_M15,
-            '30': mt5.TIMEFRAME_M30,
-            'H1': mt5.TIMEFRAME_H1,
-            'H4': mt5.TIMEFRAME_H4,
-            'D1': mt5.TIMEFRAME_D1,
-        }
+        # Fetch new data
+        logger.info(f"Fetching new data for {symbol} {year}")
+        start_date = datetime(year, 1, 1)
+        end_date = datetime(year, 12, 31) if year < datetime.now().year else datetime.now()
         
-        # Get timezone info
-        timezone = pytz.timezone("Etc/UTC")
-        start_date = timezone.localize(start_date)
-        end_date = timezone.localize(end_date)
-        
-        # Fetch OHLCV data
-        rates = mt5.copy_rates_range(symbol, timeframe_dict.get(timeframe, mt5.TIMEFRAME_M5),
-                                   start_date, end_date)
-        
-        if rates is None:
-            print("Failed to fetch data from MT5")
-            return None
+        df = self.fetch_data(symbol, timeframe, start_date, end_date)
+        if df is not None:
+            # Add technical indicators
+            df = self.add_technical_indicators(df)
             
-        # Convert to DataFrame
-        df = pd.DataFrame(rates)
-        df['time'] = pd.to_datetime(df['time'], unit='s')
-        df.set_index('time', inplace=True)
-        
-        # Remove weekend data
-        df = df[df.index.dayofweek < 5]
-        
-        # Calculate technical indicators
-        df = self._calculate_indicators(df)
-        
-        # Save to cache
-        self._save_to_cache(df, symbol, timeframe, start_date, end_date)
-        print(f"Fetched and cached data for {symbol} {timeframe}m from {start_date.date()} to {end_date.date()}")
+            # Cache the data
+            logger.info(f"Caching data to {cache_file}")
+            df.to_csv(cache_file)
         
         return df
-    
-    def _get_cache_filename(self, symbol: str, timeframe: str, start_date: datetime, end_date: datetime) -> str:
-        """Generate cache filename based on parameters"""
-        return os.path.join(self.data_dir, 
-                          f"{symbol}_{timeframe}m_{start_date.strftime('%Y%m%d')}_{end_date.strftime('%Y%m%d')}.csv")
-    
-    def _save_to_cache(self, df: pd.DataFrame, symbol: str, timeframe: str, 
-                      start_date: datetime, end_date: datetime):
-        """Save data to cache file"""
-        cache_file = self._get_cache_filename(symbol, timeframe, start_date, end_date)
-        df.to_csv(cache_file)
-    
-    def _load_from_cache(self, symbol: str, timeframe: str, 
-                        start_date: datetime, end_date: datetime) -> pd.DataFrame:
-        """Try to load data from cache file"""
-        cache_file = self._get_cache_filename(symbol, timeframe, start_date, end_date)
-        if os.path.exists(cache_file):
-            df = pd.read_csv(cache_file, index_col=0, parse_dates=True)
+
+    def fetch_data(self, symbol: str, timeframe: str, start_date: datetime, end_date: datetime) -> Optional[pd.DataFrame]:
+        """
+        Fetch data from MetaTrader5
+        """
+        try:
+            # Convert timeframe string to MT5 timeframe
+            timeframe_map = {
+                '1': mt5.TIMEFRAME_M1,
+                '5': mt5.TIMEFRAME_M5,
+                '15': mt5.TIMEFRAME_M15,
+                '30': mt5.TIMEFRAME_M30,
+                '60': mt5.TIMEFRAME_H1,
+                '240': mt5.TIMEFRAME_H4,
+                'D': mt5.TIMEFRAME_D1,
+            }
+            mt5_timeframe = timeframe_map.get(timeframe)
+            if mt5_timeframe is None:
+                logger.error(f"Invalid timeframe: {timeframe}")
+                return None
+            
+            # Fetch the data
+            rates = mt5.copy_rates_range(symbol, mt5_timeframe, start_date, end_date)
+            if rates is None or len(rates) == 0:
+                logger.error(f"Failed to fetch data for {symbol}")
+                return None
+            
+            # Convert to DataFrame
+            df = pd.DataFrame(rates)
+            df['time'] = pd.to_datetime(df['time'], unit='s')
+            df.set_index('time', inplace=True)
+            
             return df
-        return None
-    
-    def _calculate_indicators(self, df: pd.DataFrame) -> pd.DataFrame:
-        """Calculate technical indicators"""
         
+        except Exception as e:
+            logger.error(f"Error fetching data: {str(e)}")
+            return None
+
+    def add_technical_indicators(self, df: pd.DataFrame) -> pd.DataFrame:
+        """
+        Add technical indicators to the DataFrame
+        """
         # Calculate EMAs
-        df['EMA9'] = self._calculate_ema(df['close'], 9)
-        df['EMA21'] = self._calculate_ema(df['close'], 21)
-        df['EMA50'] = self._calculate_ema(df['close'], 50)
+        df['EMA9'] = df['close'].ewm(span=9, adjust=False).mean()
+        df['EMA21'] = df['close'].ewm(span=21, adjust=False).mean()
+        df['EMA50'] = df['close'].ewm(span=50, adjust=False).mean()
         
         # Calculate RSI
-        df['RSI'] = self._calculate_rsi(df['close'], 14)
+        delta = df['close'].diff()
+        gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
+        loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
+        rs = gain / loss
+        df['RSI'] = 100 - (100 / (1 + rs))
         
         # Calculate ATR
-        df['ATR'] = self._calculate_atr(df['high'], df['low'], df['close'], 14)
+        high_low = df['high'] - df['low']
+        high_close = np.abs(df['high'] - df['close'].shift())
+        low_close = np.abs(df['low'] - df['close'].shift())
+        ranges = pd.concat([high_low, high_close, low_close], axis=1)
+        true_range = np.max(ranges, axis=1)
+        df['ATR'] = true_range.rolling(14).mean()
         
         # Calculate OBV
-        df['OBV'] = self._calculate_obv(df['close'], df['tick_volume'])
+        df['OBV'] = (np.sign(df['close'].diff()) * df['tick_volume']).fillna(0).cumsum()
         
-        # Drop NaN values
-        df.dropna(inplace=True)
-        
-        # Rename columns to match environment expectations
-        df.rename(columns={
-            'open': 'Open',
-            'high': 'High',
-            'low': 'Low',
-            'close': 'Close',
-            'tick_volume': 'Volume'
-        }, inplace=True)
+        # Forward fill any NaN values
+        df.fillna(method='ffill', inplace=True)
+        df.fillna(0, inplace=True)
         
         return df
-    
-    @staticmethod
-    def _calculate_ema(series: pd.Series, period: int) -> pd.Series:
-        """Calculate Exponential Moving Average"""
-        return series.ewm(span=period, adjust=False).mean()
-    
-    @staticmethod
-    def _calculate_rsi(series: pd.Series, period: int) -> pd.Series:
-        """Calculate Relative Strength Index"""
-        delta = series.diff()
-        gain = (delta.where(delta > 0, 0)).rolling(window=period).mean()
-        loss = (-delta.where(delta < 0, 0)).rolling(window=period).mean()
-        
-        rs = gain / loss
-        return 100 - (100 / (1 + rs))
-    
-    @staticmethod
-    def _calculate_atr(high: pd.Series, low: pd.Series, close: pd.Series, period: int) -> pd.Series:
-        """Calculate Average True Range"""
-        tr = pd.DataFrame()
-        tr['h-l'] = high - low
-        tr['h-pc'] = abs(high - close.shift(1))
-        tr['l-pc'] = abs(low - close.shift(1))
-        tr['tr'] = tr[['h-l', 'h-pc', 'l-pc']].max(axis=1)
-        return tr['tr'].rolling(period).mean()
-    
-    @staticmethod
-    def _calculate_obv(close: pd.Series, volume: pd.Series) -> pd.Series:
-        """Calculate On-Balance Volume"""
-        obv = pd.Series(index=close.index, dtype=float)
-        obv.iloc[0] = volume.iloc[0]
-        
-        for i in range(1, len(close)):
-            if close.iloc[i] > close.iloc[i-1]:
-                obv.iloc[i] = obv.iloc[i-1] + volume.iloc[i]
-            elif close.iloc[i] < close.iloc[i-1]:
-                obv.iloc[i] = obv.iloc[i-1] - volume.iloc[i]
-            else:
-                obv.iloc[i] = obv.iloc[i-1]
-        
-        return obv
-    
+
     def __del__(self):
         """Cleanup MT5 connection"""
         mt5.shutdown()
