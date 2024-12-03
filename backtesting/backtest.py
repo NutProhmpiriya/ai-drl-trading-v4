@@ -6,7 +6,7 @@ import matplotlib.pyplot as plt
 from typing import List, Dict, Tuple
 from stable_baselines3 import PPO
 from utils.data_processor import DataProcessor
-from env.forex_env import ForexEnv
+from rl_env.forex_env import ForexEnv
 
 class BackTester:
     def __init__(self, model_path: str, initial_balance: float = 10000.0):

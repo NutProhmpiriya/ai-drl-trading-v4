@@ -1,7 +1,14 @@
+import os
+import sys
 from datetime import datetime
+import argparse
+
+# Add project root to Python path
+current_dir = os.path.dirname(os.path.abspath(__file__))
+sys.path.append(os.path.join(current_dir, '..'))
+
 from utils.data_processor import DataProcessor
 from backtesting.backtest import BackTester
-import os
 
 def test_model(model_path: str, symbol: str = "USDJPY", timeframe: str = "5",
                start_date: datetime = datetime(2024, 1, 1),
@@ -46,6 +53,7 @@ def test_model(model_path: str, symbol: str = "USDJPY", timeframe: str = "5",
     print(f"Plot saved to results/backtest_plot_{symbol}_{timeframe}m_{timestamp}.png")
 
 if __name__ == "__main__":
-    # Specify the path to your trained model
-    model_path = "models/your_model_name.zip"  # Replace with your model path
-    test_model(model_path)
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--model", type=str, required=True, help="Path to trained model")
+    args = parser.parse_args()
+    test_model(args.model)

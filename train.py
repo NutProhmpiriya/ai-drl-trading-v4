@@ -3,7 +3,7 @@ from datetime import datetime
 from stable_baselines3 import PPO
 from stable_baselines3.common.vec_env import DummyVecEnv
 from utils.data_processor import DataProcessor
-from env.forex_env import ForexEnv
+from rl_env.forex_env import ForexEnv
 
 def train_model(symbol: str = "USDJPY", timeframe: str = "5", 
                 start_date: datetime = datetime(2023, 1, 1),

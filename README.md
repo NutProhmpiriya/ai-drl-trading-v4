@@ -50,31 +50,21 @@ This project implements a complete DRL-based trading system with three main comp
 - Maximum Drawdown
 - Total Return
 
-## Getting Started
+## Installation
 
-### Prerequisites
-- Python 3.8+
-- Git
-- MetaTrader 5
-
-### Installation
-
-1. Clone repository:
+1. Make sure you have Python 3.8+ installed
+2. Clone this repository
+3. Run setup script:
 ```bash
-git clone https://github.com/yourusername/ai-drl-tradinv-v4.git
-cd ai-drl-tradinv-v4
+setup.bat
 ```
 
-2. Create and activate virtual environment:
+4. Activate environment:
 ```bash
-# Create environment
-setup.bat
-
-# Activate environment
 venv\Scripts\activate.bat
 ```
 
-3. Verify installation:
+5. Verify installation:
 ```bash
 python -c "import gymnasium; import stable_baselines3; import MetaTrader5; print('Setup successful!')"
 ```
@@ -115,39 +105,8 @@ Options:
 - `--max-daily-loss`: Daily loss limit (default: 0.01)
 - `--check-interval`: Seconds between checks (default: 0.1)
 
-## Development
-
-### Git Workflow
-1. Create feature branch:
-```bash
-git checkout -b feature/your-feature-name
-```
-
-2. Make changes and commit:
-```bash
-git add .
-git commit -m "Description of changes"
-```
-
-3. Push changes:
-```bash
-git push origin feature/your-feature-name
-```
-
-4. Create pull request on GitHub
-
-### Adding New Features
-1. Create new module in appropriate directory
-2. Update requirements.txt if new dependencies added
-3. Add tests if applicable
-4. Update documentation
-
 ## Important Notes
 - Always test in demo account first
 - Ensure MT5 is properly configured
 - Monitor system performance regularly
 - Consider periodic model retraining
-- Keep your branch up to date:
-```bash
-git pull origin main
-```

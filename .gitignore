@@ -27,7 +27,6 @@ models/*.zip
 results/*.csv
 results/*.png
 logs/
-data/
 
 # IDE
 .idea/
