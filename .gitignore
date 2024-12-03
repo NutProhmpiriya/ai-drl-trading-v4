@@ -23,6 +23,8 @@ wheels/
 *.egg
 
 # Project specific
+data/*
+!data/*.csv
 models/*.zip
 results/*.csv
 results/*.png
