@@ -27,6 +27,7 @@ class ForexEnv(gym.Env):
         self.max_positions = max_positions
         self.stop_loss_pips = stop_loss_pips
         self.take_profit_pips = take_profit_pips
+        self.max_daily_loss = initial_balance * 0.01  # 1% max daily loss
         
         self.current_step = 0
         self.current_position = None
@@ -75,6 +76,12 @@ class ForexEnv(gym.Env):
         
         # Get current price data
         current_price = self.df['close'].iloc[self.current_step]
+        current_date = pd.to_datetime(self.df.index[self.current_step]).date()
+        
+        # Reset daily loss if new day
+        if self.last_trade_day is None or current_date != self.last_trade_day:
+            self.daily_loss = 0
+            self.last_trade_day = current_date
         
         # Initialize step info
         info = {
@@ -84,8 +91,31 @@ class ForexEnv(gym.Env):
             'trade_profit': 0,
             'balance': self.balance,
             'total_trades': self.total_trades,
-            'winning_trades': self.winning_trades
+            'winning_trades': self.winning_trades,
+            'daily_loss': self.daily_loss
         }
+        
+        # Check if daily loss limit is reached
+        if self.daily_loss <= -self.max_daily_loss:
+            # Close any open position
+            if self.current_position is not None:
+                if self.current_position['type'] == 'buy':
+                    profit_pips = (current_price - self.current_position['entry_price']) * 100
+                else:
+                    profit_pips = (self.current_position['entry_price'] - current_price) * 100
+                
+                self.balance += profit_pips * self.lot_size * 100
+                self.current_position = None
+                self.total_trades += 1
+                if profit_pips > 0:
+                    self.winning_trades += 1
+                
+                info['trade_executed'] = True
+                info['trade_type'] = 'daily_loss_limit'
+                info['execution_price'] = current_price
+                info['trade_profit'] = profit_pips * self.lot_size * 100
+            
+            return self._get_observation(), 0, True, False, info
         
         # Check for stop loss or take profit if position exists
         if self.current_position is not None:
@@ -192,15 +222,16 @@ class ForexEnv(gym.Env):
             profit = self._get_unrealized_profit()
             reward = profit / self.initial_balance  # Normalize profit
             
+            # Update daily loss
+            self.daily_loss += profit * self.lot_size * 100
+            
             # Penalize for holding losing positions
             if profit < 0:
                 reward *= 1.5  # Increase penalty for losses
             
-            # Reward for taking profits at good times
-            if profit > 0 and self.df.iloc[self.current_step]['rsi'] > 70:
-                reward *= 1.2  # Bonus for selling in overbought
-            elif profit > 0 and self.df.iloc[self.current_step]['rsi'] < 30:
-                reward *= 1.2  # Bonus for buying in oversold
+            # Extra penalty if approaching daily loss limit
+            if self.daily_loss < -self.max_daily_loss * 0.7:  # Warning at 70% of max daily loss
+                reward *= 1.3
         
         # Penalize for trading in high spread conditions
         current_spread = self.df.iloc[self.current_step]['spread']
