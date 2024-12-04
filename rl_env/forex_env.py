@@ -49,6 +49,7 @@ class ForexEnv(gym.Env):
         self.last_trade_day = None
         self.used_margin = 0
         self.trades_history = []  # Initialize trades history list
+        self.equity_curve = []  # Track equity curve
         
         # Calculate observation space size
         self.obs_shape = (
@@ -80,6 +81,7 @@ class ForexEnv(gym.Env):
         self.last_trade_day = None
         self.used_margin = 0
         self.trades_history = []  # Reset trades history list
+        self.equity_curve = []  # Reset equity curve
         
         obs = self._get_observation()
         info = {
@@ -137,13 +139,21 @@ class ForexEnv(gym.Env):
             if self.positions:
                 profit_pips = (current_price - self.positions[0]['entry_price']) * 100
                 self.balance += profit_pips * self.lot_size * 100
-                self.trades_history.append({
+                trade_data = {
+                    'timestamp': self.df.index[self.current_step],
                     'type': 'daily_loss_limit',
                     'entry_price': self.positions[0]['entry_price'],
                     'execution_price': current_price,
                     'profit': profit_pips * self.lot_size * 100,
-                    'balance': self.balance
-                })
+                    'balance': self.balance,
+                    'position_size': self.lot_size,
+                    'duration': self.current_step - self.positions[0]['entry_step'],
+                    'market_price': self.df['close'].iloc[self.current_step],
+                    'equity': self.balance + self._calculate_unrealized_pnl(),
+                    'drawdown': self._calculate_drawdown(),
+                    'drawdown_pct': self._calculate_drawdown_percentage()
+                }
+                self.trades_history.append(trade_data)
                 self.positions = []
                 self.total_trades += 1
                 if profit_pips > 0:
@@ -166,13 +176,21 @@ class ForexEnv(gym.Env):
             if profit_pips <= -self.stop_loss_pips:
                 reward = -self.stop_loss_pips
                 self.balance += reward * self.lot_size * 100  # Convert pips to cash
-                self.trades_history.append({
+                trade_data = {
+                    'timestamp': self.df.index[self.current_step],
                     'type': 'stop_loss',
                     'entry_price': entry_price,
                     'execution_price': current_price,
                     'profit': reward * self.lot_size * 100,
-                    'balance': self.balance
-                })
+                    'balance': self.balance,
+                    'position_size': self.lot_size,
+                    'duration': self.current_step - self.positions[0]['entry_step'],
+                    'market_price': self.df['close'].iloc[self.current_step],
+                    'equity': self.balance + self._calculate_unrealized_pnl(),
+                    'drawdown': self._calculate_drawdown(),
+                    'drawdown_pct': self._calculate_drawdown_percentage()
+                }
+                self.trades_history.append(trade_data)
                 self.positions = []
                 self.total_trades += 1
                 info['trade_executed'] = True
@@ -186,13 +204,21 @@ class ForexEnv(gym.Env):
             if profit_pips >= self.take_profit_pips:
                 reward = self.take_profit_pips
                 self.balance += reward * self.lot_size * 100  # Convert pips to cash
-                self.trades_history.append({
+                trade_data = {
+                    'timestamp': self.df.index[self.current_step],
                     'type': 'take_profit',
                     'entry_price': entry_price,
                     'execution_price': current_price,
                     'profit': reward * self.lot_size * 100,
-                    'balance': self.balance
-                })
+                    'balance': self.balance,
+                    'position_size': self.lot_size,
+                    'duration': self.current_step - self.positions[0]['entry_step'],
+                    'market_price': self.df['close'].iloc[self.current_step],
+                    'equity': self.balance + self._calculate_unrealized_pnl(),
+                    'drawdown': self._calculate_drawdown(),
+                    'drawdown_pct': self._calculate_drawdown_percentage()
+                }
+                self.trades_history.append(trade_data)
                 self.positions = []
                 self.total_trades += 1
                 self.winning_trades += 1
@@ -328,6 +354,39 @@ class ForexEnv(gym.Env):
             return (current_price - entry_price) * 100
         else:
             return (entry_price - current_price) * 100
+    
+    def _calculate_unrealized_pnl(self) -> float:
+        """Calculate unrealized profit and loss"""
+        if not self.positions:
+            return 0
+        
+        entry_price = self.positions[0]['entry_price']
+        current_price = self.df['close'].iloc[self.current_step]
+        
+        if self.positions[0]['type'] == 'buy':
+            return (current_price - entry_price) * self.lot_size * 100
+        else:
+            return (entry_price - current_price) * self.lot_size * 100
+    
+    def _calculate_drawdown(self) -> float:
+        """Calculate drawdown"""
+        if not self.equity_curve:
+            return 0
+        
+        max_equity = max(self.equity_curve)
+        current_equity = self.equity_curve[-1]
+        
+        return max_equity - current_equity
+    
+    def _calculate_drawdown_percentage(self) -> float:
+        """Calculate drawdown percentage"""
+        if not self.equity_curve:
+            return 0
+        
+        max_equity = max(self.equity_curve)
+        current_equity = self.equity_curve[-1]
+        
+        return ((max_equity - current_equity) / max_equity) * 100
     
     def render(self, mode: str = 'human'):
         """Render the environment to the screen"""

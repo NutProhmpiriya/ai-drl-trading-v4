@@ -183,16 +183,47 @@ def save_backtest_report(start_date: str, end_date: str, trades_df: pd.DataFrame
     report_dir = os.path.join(project_dir, 'backtest_report')
     os.makedirs(report_dir, exist_ok=True)
     
-    # Save trades history
-    trades_file = os.path.join(report_dir, f'trades_{SYMBOL}_{start_date}_{end_date}.csv')
-    trades_df.to_csv(trades_file)
-    logger.info(f"\nDetailed trade history saved to {trades_file}")
+    # Extract year from start_date
+    year = pd.to_datetime(start_date).year
     
-    # Save statistics
-    stats_file = os.path.join(report_dir, f'stats_{SYMBOL}_{start_date}_{end_date}.json')
-    with open(stats_file, 'w') as f:
-        json.dump(stats, f, indent=4)
-    logger.info(f"Trading statistics saved to {stats_file}")
+    # Get current timestamp for the report
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    
+    # Convert timestamp to datetime if it's not already
+    if 'timestamp' in trades_df.columns and not pd.api.types.is_datetime64_any_dtype(trades_df['timestamp']):
+        trades_df['timestamp'] = pd.to_datetime(trades_df['timestamp'])
+    
+    # Add additional trade metrics
+    if len(trades_df) > 0:
+        # Trade performance metrics
+        trades_df['cumulative_profit'] = trades_df['profit'].cumsum()
+        trades_df['cumulative_return'] = (trades_df['cumulative_profit'] / stats['initial_balance']) * 100
+        
+        # Rolling metrics (using 20-trade window)
+        trades_df['rolling_win_rate'] = trades_df['profit'].rolling(window=20).apply(lambda x: (x > 0).mean() * 100)
+        trades_df['rolling_profit'] = trades_df['profit'].rolling(window=20).mean()
+        trades_df['rolling_sharpe'] = (trades_df['profit'].rolling(window=20).mean() / 
+                                     trades_df['profit'].rolling(window=20).std())
+        
+        # Add overall statistics to each row
+        trades_df['total_trades'] = stats['total_trades']
+        trades_df['winning_trades'] = stats['winning_trades']
+        trades_df['win_rate'] = stats['win_rate']
+        trades_df['initial_balance'] = stats['initial_balance']
+        trades_df['final_balance'] = stats['final_balance']
+        trades_df['total_profit'] = stats['total_profit']
+        trades_df['profit_percentage'] = stats['profit_percentage']
+        trades_df['profit_factor'] = stats['profit_factor']
+        trades_df['avg_win'] = stats['avg_win']
+        trades_df['avg_loss'] = stats['avg_loss']
+        trades_df['max_drawdown'] = stats['max_drawdown']
+        trades_df['max_drawdown_percentage'] = stats['max_drawdown_percentage']
+        trades_df['sharpe_ratio'] = stats['sharpe_ratio']
+    
+    # Save all data to a single CSV file with year and timestamp
+    report_file = os.path.join(report_dir, f'backtest_{SYMBOL}_{year}_{timestamp}.csv')
+    trades_df.to_csv(report_file)
+    logger.info(f"\nBacktest report saved to {report_file}")
 
 def run_backtest():
     """Run backtesting on historical periods"""
