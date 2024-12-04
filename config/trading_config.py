@@ -11,18 +11,19 @@ TRADING_PARAMS = {
     'initial_balance': 10000,
     'lot_size': 0.1,
     'max_positions': 1,
-    'stop_loss_pips': 30,
-    'take_profit_pips': 60,
+    'stop_loss_pips': 50,  # เพิ่ม stop loss เพื่อให้มีพื้นที่ในการทำกำไรมากขึ้น
+    'take_profit_pips': 100,  # เพิ่ม take profit เพื่อให้คุ้มค่ากับความเสี่ยง
 }
 
 # Training parameters
 TRAINING_PARAMS = {
-    'total_timesteps': 100000,
-    'learning_rate': 0.0003,
-    'batch_size': 64,
+    'total_timesteps': 200000,  # เพิ่มจำนวน timesteps
+    'learning_rate': 1e-5,  # ลด learning rate
+    'batch_size': 128,  # เพิ่ม batch size
     'n_steps': 2048,
     'n_epochs': 10,
     'gamma': 0.99,
+    'ent_coef': 0.01,  # เพิ่ม entropy coefficient
     'reward_threshold': 1000,  # Stop training if mean reward reaches this threshold
     'eval_freq': 10000,  # Evaluate model every n steps
     'verbose': 1

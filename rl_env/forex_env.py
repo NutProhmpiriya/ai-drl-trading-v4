@@ -13,7 +13,15 @@ class ForexEnv(gym.Env):
                  stop_loss_pips: float = 30, take_profit_pips: float = 60):
         super().__init__()
 
-        self.df = df
+        # Convert column names to lowercase for consistency
+        self.df = df.copy()
+        self.df.columns = self.df.columns.str.lower()
+        
+        # Add additional features
+        self.df['spread'] = self.df['ask'] - self.df['bid']
+        self.df['volume_ma'] = self.df['tick_volume'].rolling(window=20).mean()
+        self.df['volatility'] = self.df['close'].pct_change().rolling(window=20).std()
+        
         self.initial_balance = initial_balance
         self.lot_size = lot_size
         self.max_positions = max_positions
@@ -31,11 +39,11 @@ class ForexEnv(gym.Env):
         # Define action and observation space
         self.action_space = spaces.Discrete(3)  # 0: Hold, 1: Buy, 2: Sell
         
-        # Observation space: [EMAs, RSI, ATR, OBV, Position, Balance, Daily PnL]
+        # Observation space: [EMAs, RSI, ATR, OBV, Volume, Spread, Volatility, Position, Balance, Daily PnL]
         self.observation_space = spaces.Box(
             low=-np.inf, 
             high=np.inf, 
-            shape=(10,),  # 3 EMAs + RSI + ATR + OBV + Position + Balance + Daily PnL + Current Price
+            shape=(13,),  # Added Volume, Spread, Volatility
             dtype=np.float32
         )
     
@@ -51,7 +59,7 @@ class ForexEnv(gym.Env):
         self.total_trades = 0
         self.winning_trades = 0
         
-        obs = self._next_observation()
+        obs = self._get_observation()
         info = {
             'balance': self.balance,
             'position': None,
@@ -66,7 +74,7 @@ class ForexEnv(gym.Env):
         self.current_step += 1
         
         # Get current price data
-        current_price = self.df['Close'].iloc[self.current_step]
+        current_price = self.df['close'].iloc[self.current_step]
         
         # Initialize step info
         info = {
@@ -100,8 +108,10 @@ class ForexEnv(gym.Env):
                 info['execution_price'] = current_price
                 info['trade_profit'] = reward * self.lot_size * 100
                 
+                return self._get_observation(), reward, False, False, info
+            
             # Check take profit
-            elif profit_pips >= self.take_profit_pips:
+            if profit_pips >= self.take_profit_pips:
                 reward = self.take_profit_pips
                 self.balance += reward * self.lot_size * 100  # Convert pips to cash
                 self.current_position = None
@@ -111,109 +121,123 @@ class ForexEnv(gym.Env):
                 info['trade_type'] = 'take_profit'
                 info['execution_price'] = current_price
                 info['trade_profit'] = reward * self.lot_size * 100
+                
+                return self._get_observation(), reward, False, False, info
         
-        # Process new action if no position or position was just closed
-        if self.current_position is None and action != 0:  # 0 is hold
+        # Process the action
+        if action != 0 and self.current_position is None:  # Open new position
             if action == 1:  # Buy
                 self.current_position = {
                     'type': 'buy',
-                    'entry_price': current_price
+                    'entry_price': current_price,
+                    'entry_step': self.current_step
                 }
                 info['trade_executed'] = True
                 info['trade_type'] = 'buy'
                 info['execution_price'] = current_price
-            elif action == 2:  # Sell
+            else:  # Sell
                 self.current_position = {
                     'type': 'sell',
-                    'entry_price': current_price
+                    'entry_price': current_price,
+                    'entry_step': self.current_step
                 }
                 info['trade_executed'] = True
                 info['trade_type'] = 'sell'
                 info['execution_price'] = current_price
         
         # Calculate reward
-        reward = 0
-        if self.current_position is not None:
-            if self.current_position['type'] == 'buy':
-                reward = (current_price - self.current_position['entry_price']) * 100
-            else:  # sell
-                reward = (self.current_position['entry_price'] - current_price) * 100
-        
-        # Update daily loss
-        current_day = self.df.index[self.current_step].date()
-        if self.last_trade_day != current_day:
-            self.daily_loss = 0
-            self.last_trade_day = current_day
+        reward = self._calculate_reward(action)
         
         # Check if episode is done
-        done = self.current_step >= len(self.df) - 1
-        truncated = False  # For gymnasium v1.0.0
+        done = self.current_step >= len(self.df) - 2 or self.balance <= 0
         
-        # Update info with final state
-        info.update({
-            'balance': self.balance,
-            'total_trades': self.total_trades,
-            'winning_trades': self.winning_trades
-        })
-        
-        # Get next observation
-        obs = self._next_observation()
-        
-        return obs, reward, done, truncated, info
+        return self._get_observation(), reward, done, False, info
     
-    def _next_observation(self) -> np.ndarray:
-        """Get the next observation"""
-        current_price = self.df['Close'].iloc[self.current_step]
+    def _get_observation(self) -> np.ndarray:
+        """Get current observation"""
+        current_price = self.df.iloc[self.current_step]
         
-        # Normalize price-based features
-        ema9 = self.df['EMA9'].iloc[self.current_step] / current_price - 1
-        ema21 = self.df['EMA21'].iloc[self.current_step] / current_price - 1
-        ema50 = self.df['EMA50'].iloc[self.current_step] / current_price - 1
+        # Technical indicators
+        ema_fast = current_price['ema9']
+        ema_medium = current_price['ema21']
+        ema_slow = current_price['ema50']
+        rsi = current_price['rsi']
+        atr = current_price['atr']
+        obv = current_price['obv']
         
-        # Get other indicators
-        rsi = self.df['RSI'].iloc[self.current_step] / 100  # Normalize to 0-1
-        atr = self.df['ATR'].iloc[self.current_step] / current_price  # Normalize by price
-        obv = self.df['OBV'].iloc[self.current_step]
+        # New features
+        volume = current_price['tick_volume'] / self.df['tick_volume'].max()  # Normalized volume
+        volume_ma = current_price['volume_ma'] / self.df['volume_ma'].max()  # Normalized volume MA
+        spread = current_price['spread'] / current_price['close']  # Normalized spread
+        volatility = current_price['volatility']
         
-        # Normalize OBV using recent window
-        obv_window = self.df['OBV'].iloc[max(0, self.current_step-20):self.current_step+1]
-        obv_min = obv_window.min()
-        obv_max = obv_window.max()
-        if obv_max - obv_min != 0:
-            obv_norm = (obv - obv_min) / (obv_max - obv_min)
-        else:
-            obv_norm = 0
-        
-        # Position encoding: -1 for sell, 0 for no position, 1 for buy
-        position = 0
-        if self.current_position is not None:
-            position = 1 if self.current_position['type'] == 'buy' else -1
-        
-        # Normalize balance change from initial
-        balance_change = (self.balance - self.initial_balance) / self.initial_balance
-        
-        # Normalize daily PnL
-        daily_pnl = self.daily_loss / self.initial_balance
-        
-        # Current price change
-        price_change = 0
-        if self.current_step > 0:
-            prev_price = self.df['Close'].iloc[self.current_step-1]
-            price_change = (current_price - prev_price) / prev_price
+        # Position and account info
+        position = 1 if self.current_position is not None and self.current_position['type'] == 'buy' else (-1 if self.current_position is not None and self.current_position['type'] == 'sell' else 0)
+        balance = self.balance / self.initial_balance  # Normalized balance
+        daily_pnl = self.daily_loss / self.initial_balance  # Normalized daily PnL
         
         return np.array([
-            ema9, ema21, ema50,
-            rsi, atr, obv_norm,
-            position,
-            balance_change,
-            daily_pnl,
-            price_change
+            ema_fast, ema_medium, ema_slow,
+            rsi, atr, obv,
+            volume, volume_ma, spread, volatility,
+            position, balance, daily_pnl
         ], dtype=np.float32)
     
-    def render(self, mode: str = 'human') -> None:
+    def _calculate_reward(self, action: int) -> float:
+        """Calculate reward based on action and state"""
+        reward = 0
+        
+        # Base reward from profit/loss
+        if self.current_position:
+            profit = self._get_unrealized_profit()
+            reward = profit / self.initial_balance  # Normalize profit
+            
+            # Penalize for holding losing positions
+            if profit < 0:
+                reward *= 1.5  # Increase penalty for losses
+            
+            # Reward for taking profits at good times
+            if profit > 0 and self.df.iloc[self.current_step]['rsi'] > 70:
+                reward *= 1.2  # Bonus for selling in overbought
+            elif profit > 0 and self.df.iloc[self.current_step]['rsi'] < 30:
+                reward *= 1.2  # Bonus for buying in oversold
+        
+        # Penalize for trading in high spread conditions
+        current_spread = self.df.iloc[self.current_step]['spread']
+        if action != 0 and current_spread > self.df['spread'].mean() * 1.5:
+            reward *= 0.8
+        
+        # Reward for trading with the trend
+        if action == 1:  # Buy
+            if self.df.iloc[self.current_step]['ema9'] > self.df.iloc[self.current_step]['ema21']:
+                reward *= 1.1
+        elif action == 2:  # Sell
+            if self.df.iloc[self.current_step]['ema9'] < self.df.iloc[self.current_step]['ema21']:
+                reward *= 1.1
+        
+        # Penalize for overtrading
+        if action != 0 and self.total_trades > 20:  # Assuming 20 trades per day is excessive
+            reward *= 0.9
+        
+        return reward
+    
+    def _get_unrealized_profit(self) -> float:
+        """Get unrealized profit"""
+        if self.current_position is None:
+            return 0
+        
+        entry_price = self.current_position['entry_price']
+        current_price = self.df['close'].iloc[self.current_step]
+        
+        if self.current_position['type'] == 'buy':
+            return (current_price - entry_price) * 100
+        else:
+            return (entry_price - current_price) * 100
+    
+    def render(self, mode: str = 'human'):
         """Render the environment to the screen"""
         pass
     
-    def close(self) -> None:
+    def close(self):
         """Close the environment"""
         pass

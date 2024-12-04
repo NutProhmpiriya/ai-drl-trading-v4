@@ -26,7 +26,7 @@ def test_model():
             return
         
         # Load the trained model
-        model_filename = f"{os.path.splitext(MODEL_PATH)[0]}_{TESTING_YEAR-1}.zip"
+        model_filename = "models/final_model.zip"
         if not os.path.exists(model_filename):
             logger.error(f"Model file not found: {model_filename}")
             return
