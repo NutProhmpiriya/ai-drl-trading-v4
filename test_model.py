@@ -12,6 +12,7 @@ from config.trading_config import (
     MODEL_PATH, DATA_PATH,
     TRADING_PARAMS
 )
+import json
 
 # Setup logging
 logging.basicConfig(level=logging.INFO)
@@ -95,11 +96,59 @@ def test_model():
         # Save detailed trade history
         trades_df = pd.DataFrame(trades)
         if not trades_df.empty:
+            # เพิ่มข้อมูลสำหรับ visualization
+            trades_df['timestamp'] = pd.to_datetime(df.index[trades_df['entry_step']])
+            trades_df['exit_step'] = trades_df['entry_step'].shift(-1)
+            trades_df['exit_price'] = trades_df['price'].shift(-1)
+            trades_df['duration'] = trades_df['exit_step'] - trades_df['entry_step']
+            trades_df['pnl'] = trades_df['profit'].cumsum()
+            trades_df['balance'] = TRADING_PARAMS['initial_balance'] + trades_df['pnl']
+            trades_df['drawdown'] = trades_df['balance'].cummax() - trades_df['balance']
+            trades_df['drawdown_pct'] = (trades_df['drawdown'] / trades_df['balance'].cummax()) * 100
+            
+            # เพิ่มข้อมูล indicators
+            for idx, row in trades_df.iterrows():
+                step = int(row['entry_step'])
+                trades_df.loc[idx, 'volume'] = df['tick_volume'].iloc[step]
+                trades_df.loc[idx, 'spread'] = df['ask'].iloc[step] - df['bid'].iloc[step]
+                trades_df.loc[idx, 'rsi'] = df['rsi'].iloc[step]
+                trades_df.loc[idx, 'atr'] = df['atr'].iloc[step]
+                trades_df.loc[idx, 'ema9'] = df['ema9'].iloc[step]
+                trades_df.loc[idx, 'ema21'] = df['ema21'].iloc[step]
+                trades_df.loc[idx, 'ema50'] = df['ema50'].iloc[step]
+            
+            # คำนวณสถิติเพิ่มเติม
+            stats = {
+                'total_trades': env.total_trades,
+                'winning_trades': env.winning_trades,
+                'win_rate': win_rate,
+                'profit_factor': abs(trades_df[trades_df['profit'] > 0]['profit'].sum() / trades_df[trades_df['profit'] < 0]['profit'].sum()) if len(trades_df[trades_df['profit'] < 0]) > 0 else float('inf'),
+                'avg_win': trades_df[trades_df['profit'] > 0]['profit'].mean() if len(trades_df[trades_df['profit'] > 0]) > 0 else 0,
+                'avg_loss': trades_df[trades_df['profit'] < 0]['profit'].mean() if len(trades_df[trades_df['profit'] < 0]) > 0 else 0,
+                'max_drawdown': trades_df['drawdown'].max(),
+                'max_drawdown_pct': trades_df['drawdown_pct'].max(),
+                'avg_trade_duration': trades_df['duration'].mean(),
+                'profit_percentage': profit_percentage,
+                'sharpe_ratio': (trades_df['profit'].mean() / trades_df['profit'].std()) * np.sqrt(252) if len(trades_df) > 0 else 0,
+                'avg_volume': trades_df['volume'].mean(),
+                'avg_spread': trades_df['spread'].mean()
+            }
+            
+            # บันทึกข้อมูล
             results_dir = os.path.join(os.path.dirname(MODEL_PATH), 'results')
             os.makedirs(results_dir, exist_ok=True)
+            
+            # บันทึก trades
             trades_file = os.path.join(results_dir, f'trades_{SYMBOL}_{TESTING_YEAR}.csv')
             trades_df.to_csv(trades_file, index=False)
+            
+            # บันทึก stats
+            stats_file = os.path.join(results_dir, f'stats_{SYMBOL}_{TESTING_YEAR}.json')
+            with open(stats_file, 'w') as f:
+                json.dump(stats, f, indent=4)
+            
             logger.info(f"\nDetailed trade history saved to {trades_file}")
+            logger.info(f"Trading statistics saved to {stats_file}")
         
     except Exception as e:
         logger.error(f"Error during testing: {str(e)}")
