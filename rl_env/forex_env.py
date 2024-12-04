@@ -11,44 +11,59 @@ class ForexEnv(gym.Env):
     def __init__(self, df: pd.DataFrame, initial_balance: float = 10000.0,
                  lot_size: float = 0.1, max_positions: int = 1,
                  stop_loss_pips: float = 30, take_profit_pips: float = 60,
-                 leverage: float = 100, margin_requirement: float = 0.01):
+                 leverage: float = 100, margin_requirement: float = 0.01,
+                 spread: float = 0.0002):
         super().__init__()
 
         # Convert column names to lowercase for consistency
         self.df = df.copy()
         self.df.columns = self.df.columns.str.lower()
         
+        # Calculate bid/ask from close price
+        self.df['ask'] = self.df['close'] + (spread / 2)
+        self.df['bid'] = self.df['close'] - (spread / 2)
+        
         # Add additional features
         self.df['spread'] = self.df['ask'] - self.df['bid']
         self.df['volume_ma'] = self.df['tick_volume'].rolling(window=20).mean()
-        self.df['volatility'] = self.df['close'].pct_change().rolling(window=20).std()
         
+        # Drop any NaN values
+        self.df.dropna(inplace=True)
+        
+        # Store parameters
         self.initial_balance = initial_balance
         self.lot_size = lot_size
         self.max_positions = max_positions
         self.stop_loss_pips = stop_loss_pips
         self.take_profit_pips = take_profit_pips
-        self.max_daily_loss = initial_balance * 0.01  # 1% max daily loss
         self.leverage = leverage
         self.margin_requirement = margin_requirement
         
+        # Initialize state
         self.current_step = 0
-        self.current_position = None
-        self.daily_loss = 0
-        self.last_trade_day = None
         self.balance = initial_balance
-        self.used_margin = 0
+        self.positions = []
         self.total_trades = 0
         self.winning_trades = 0
+        self.daily_loss = 0
+        self.last_trade_day = None
+        self.used_margin = 0
+        self.trades_history = []  # Initialize trades history list
+        
+        # Calculate observation space size
+        self.obs_shape = (
+            4 +  # Price features (OHLC)
+            5 +  # Technical indicators (RSI, ATR, EMA9, EMA21, EMA50)
+            2 +  # Market features (Volume, Spread)
+            5    # Position features (Position, Profit, Balance, Free Margin, Position Utilization)
+        )
         
         # Define action and observation space
         self.action_space = spaces.Discrete(3)  # 0: Hold, 1: Buy, 2: Sell
-        
-        # Observation space: [EMAs, RSI, ATR, OBV, Volume, Spread, Volatility, Position, Balance, Daily PnL]
         self.observation_space = spaces.Box(
-            low=-np.inf, 
-            high=np.inf, 
-            shape=(13,),  # Added Volume, Spread, Volatility
+            low=-np.inf,
+            high=np.inf,
+            shape=(self.obs_shape,),
             dtype=np.float32
         )
     
@@ -57,13 +72,14 @@ class ForexEnv(gym.Env):
         super().reset(seed=seed)
         
         self.current_step = 0
-        self.current_position = None
         self.balance = self.initial_balance
-        self.daily_loss = 0
-        self.last_trade_day = None
+        self.positions = []
         self.total_trades = 0
         self.winning_trades = 0
+        self.daily_loss = 0
+        self.last_trade_day = None
         self.used_margin = 0
+        self.trades_history = []  # Reset trades history list
         
         obs = self._get_observation()
         info = {
@@ -109,23 +125,26 @@ class ForexEnv(gym.Env):
         required_margin = position_size * self.margin_requirement
         
         # Check if we have enough free margin for new position
-        if action != 0 and self.current_position is None:
+        if action != 0 and not self.positions:
             if required_margin > (self.balance - self.used_margin):
                 # Not enough margin, force hold
                 action = 0
                 info['trade_type'] = 'margin_call'
         
         # Check if daily loss limit is reached
-        if self.daily_loss <= -self.max_daily_loss:
+        if self.daily_loss <= -self.initial_balance * 0.01:  # 1% max daily loss
             # Close any open position
-            if self.current_position is not None:
-                if self.current_position['type'] == 'buy':
-                    profit_pips = (current_price - self.current_position['entry_price']) * 100
-                else:
-                    profit_pips = (self.current_position['entry_price'] - current_price) * 100
-                
+            if self.positions:
+                profit_pips = (current_price - self.positions[0]['entry_price']) * 100
                 self.balance += profit_pips * self.lot_size * 100
-                self.current_position = None
+                self.trades_history.append({
+                    'type': 'daily_loss_limit',
+                    'entry_price': self.positions[0]['entry_price'],
+                    'execution_price': current_price,
+                    'profit': profit_pips * self.lot_size * 100,
+                    'balance': self.balance
+                })
+                self.positions = []
                 self.total_trades += 1
                 if profit_pips > 0:
                     self.winning_trades += 1
@@ -138,20 +157,23 @@ class ForexEnv(gym.Env):
             return self._get_observation(), 0, True, False, info
         
         # Check for stop loss or take profit if position exists
-        if self.current_position is not None:
-            entry_price = self.current_position['entry_price']
-            position_type = self.current_position['type']
+        if self.positions:
+            entry_price = self.positions[0]['entry_price']
             
-            if position_type == 'buy':
-                profit_pips = (current_price - entry_price) * 100
-            else:  # sell
-                profit_pips = (entry_price - current_price) * 100
+            profit_pips = (current_price - entry_price) * 100
             
             # Check stop loss
             if profit_pips <= -self.stop_loss_pips:
                 reward = -self.stop_loss_pips
                 self.balance += reward * self.lot_size * 100  # Convert pips to cash
-                self.current_position = None
+                self.trades_history.append({
+                    'type': 'stop_loss',
+                    'entry_price': entry_price,
+                    'execution_price': current_price,
+                    'profit': reward * self.lot_size * 100,
+                    'balance': self.balance
+                })
+                self.positions = []
                 self.total_trades += 1
                 info['trade_executed'] = True
                 info['trade_type'] = 'stop_loss'
@@ -164,7 +186,14 @@ class ForexEnv(gym.Env):
             if profit_pips >= self.take_profit_pips:
                 reward = self.take_profit_pips
                 self.balance += reward * self.lot_size * 100  # Convert pips to cash
-                self.current_position = None
+                self.trades_history.append({
+                    'type': 'take_profit',
+                    'entry_price': entry_price,
+                    'execution_price': current_price,
+                    'profit': reward * self.lot_size * 100,
+                    'balance': self.balance
+                })
+                self.positions = []
                 self.total_trades += 1
                 self.winning_trades += 1
                 info['trade_executed'] = True
@@ -175,23 +204,23 @@ class ForexEnv(gym.Env):
                 return self._get_observation(), reward, False, False, info
         
         # Process the action
-        if action != 0 and self.current_position is None:  # Open new position
+        if action != 0 and not self.positions:  # Open new position
             if action == 1:  # Buy
-                self.current_position = {
+                self.positions.append({
                     'type': 'buy',
                     'entry_price': current_price,
                     'entry_step': self.current_step
-                }
+                })
                 self.used_margin += required_margin
                 info['trade_executed'] = True
                 info['trade_type'] = 'buy'
                 info['execution_price'] = current_price
             else:  # Sell
-                self.current_position = {
+                self.positions.append({
                     'type': 'sell',
                     'entry_price': current_price,
                     'entry_step': self.current_step
-                }
+                })
                 self.used_margin += required_margin
                 info['trade_executed'] = True
                 info['trade_type'] = 'sell'
@@ -206,41 +235,49 @@ class ForexEnv(gym.Env):
         return self._get_observation(), reward, done, False, info
     
     def _get_observation(self) -> np.ndarray:
-        """Get current observation"""
-        current_price = self.df.iloc[self.current_step]
+        """Get current observation (state)"""
+        current_step_data = self.df.iloc[self.current_step]
+        
+        # Price features
+        price_features = [
+            current_step_data['close'],
+            current_step_data['high'],
+            current_step_data['low'],
+            current_step_data['open']
+        ]
         
         # Technical indicators
-        ema_fast = current_price['ema9']
-        ema_medium = current_price['ema21']
-        ema_slow = current_price['ema50']
-        rsi = current_price['rsi']
-        atr = current_price['atr']
-        obv = current_price['obv']
+        tech_features = [
+            current_step_data['rsi'],
+            current_step_data['atr'],
+            current_step_data['ema9'],
+            current_step_data['ema21'],
+            current_step_data['ema50']
+        ]
         
-        # New features
-        volume = current_price['tick_volume'] / self.df['tick_volume'].max()  # Normalized volume
-        volume_ma = current_price['volume_ma'] / self.df['volume_ma'].max()  # Normalized volume MA
-        spread = current_price['spread'] / current_price['close']  # Normalized spread
-        volatility = current_price['volatility']
+        # Volume and spread
+        market_features = [
+            current_step_data['tick_volume'] / self.df['tick_volume'].mean(),  # Normalized volume
+            current_step_data['spread'] / self.df['spread'].mean()  # Normalized spread
+        ]
         
-        # Position and account info
-        position = 1 if self.current_position is not None and self.current_position['type'] == 'buy' else (-1 if self.current_position is not None and self.current_position['type'] == 'sell' else 0)
-        balance = self.balance / self.initial_balance  # Normalized balance
-        daily_pnl = self.daily_loss / self.initial_balance  # Normalized daily PnL
+        # Position features
+        position_features = [
+            1 if self.positions and self.positions[0]['type'] == 'buy' else (-1 if self.positions and self.positions[0]['type'] == 'sell' else 0),
+            self._get_unrealized_profit(),
+            self.balance / self.initial_balance,  # Normalized balance
+            (self.balance - self.used_margin) / self.initial_balance,  # Normalized free margin
+            self.total_trades / self.max_positions  # Position utilization
+        ]
         
-        return np.array([
-            ema_fast, ema_medium, ema_slow,
-            rsi, atr, obv,
-            volume, volume_ma, spread, volatility,
-            position, balance, daily_pnl
-        ], dtype=np.float32)
+        return np.array(price_features + tech_features + market_features + position_features)
     
     def _calculate_reward(self, action: int) -> float:
         """Calculate reward based on action and state"""
         reward = 0
         
         # Base reward from profit/loss
-        if self.current_position:
+        if self.positions:
             profit = self._get_unrealized_profit()
             reward = profit / self.initial_balance  # Normalize profit
             
@@ -252,7 +289,7 @@ class ForexEnv(gym.Env):
                 reward *= 1.5  # Increase penalty for losses
             
             # Extra penalty if approaching daily loss limit
-            if self.daily_loss < -self.max_daily_loss * 0.7:  # Warning at 70% of max daily loss
+            if self.daily_loss < -self.initial_balance * 0.01 * 0.7:  # Warning at 70% of max daily loss
                 reward *= 1.3
             
             # Extra penalty if approaching margin call (less than 30% free margin)
@@ -281,13 +318,13 @@ class ForexEnv(gym.Env):
     
     def _get_unrealized_profit(self) -> float:
         """Get unrealized profit"""
-        if self.current_position is None:
+        if not self.positions:
             return 0
         
-        entry_price = self.current_position['entry_price']
+        entry_price = self.positions[0]['entry_price']
         current_price = self.df['close'].iloc[self.current_step]
         
-        if self.current_position['type'] == 'buy':
+        if self.positions[0]['type'] == 'buy':
             return (current_price - entry_price) * 100
         else:
             return (entry_price - current_price) * 100

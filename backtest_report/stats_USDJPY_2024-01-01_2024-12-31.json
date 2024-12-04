@@ -1,0 +1,15 @@
+{
+    "total_trades": 1,
+    "winning_trades": 1,
+    "win_rate": 100.0,
+    "initial_balance": 10000.0,
+    "final_balance": 10141.999999999996,
+    "total_profit": 141.9999999999959,
+    "profit_percentage": 1.419999999999959,
+    "profit_factor": Infinity,
+    "avg_win": 141.9999999999959,
+    "avg_loss": 0,
+    "max_drawdown": 0.0,
+    "max_drawdown_percentage": 0.0,
+    "sharpe_ratio": 0
+}

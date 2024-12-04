@@ -3,6 +3,7 @@ Configuration settings for the trading environment and model training
 """
 
 import os
+import MetaTrader5 as mt5
 
 # Trading parameters
 TRADING_PARAMS = {
@@ -19,7 +20,7 @@ TRADING_PARAMS = {
 
 # Training parameters
 TRAINING_PARAMS = {
-    'total_timesteps': 200000,  # เพิ่มจำนวน timesteps
+    'total_timesteps': 1,  # ใช้เป็นตัวคูณกับจำนวนข้อมูล
     'learning_rate': 1e-5,  # ลด learning rate
     'batch_size': 128,  # เพิ่ม batch size
     'n_steps': 2048,
@@ -32,10 +33,21 @@ TRAINING_PARAMS = {
 }
 
 # Data parameters
-SYMBOL = TRADING_PARAMS['symbol']
-TIMEFRAME = TRADING_PARAMS['timeframe']
-TRAINING_YEAR = 2023
-TESTING_YEAR = 2024
+SYMBOL = "USDJPY"
+TIMEFRAME = mt5.TIMEFRAME_M5  # 5 minute timeframe
+
+# Training period (2023)
+TRAIN_START = "2023-01-01"
+TRAIN_END = "2023-12-31"
+
+# Testing period (2024)
+TEST_START = "2024-01-01"
+TEST_END = "2024-12-31"
+
+# Backtesting periods 
+BACKTEST_PERIODS = [
+    ("2024-01-01", "2024-12-31")
+]
 
 # Paths
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
