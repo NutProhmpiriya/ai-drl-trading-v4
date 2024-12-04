@@ -10,7 +10,8 @@ class ForexEnv(gym.Env):
 
     def __init__(self, df: pd.DataFrame, initial_balance: float = 10000.0,
                  lot_size: float = 0.1, max_positions: int = 1,
-                 stop_loss_pips: float = 30, take_profit_pips: float = 60):
+                 stop_loss_pips: float = 30, take_profit_pips: float = 60,
+                 leverage: float = 100, margin_requirement: float = 0.01):
         super().__init__()
 
         # Convert column names to lowercase for consistency
@@ -28,12 +29,15 @@ class ForexEnv(gym.Env):
         self.stop_loss_pips = stop_loss_pips
         self.take_profit_pips = take_profit_pips
         self.max_daily_loss = initial_balance * 0.01  # 1% max daily loss
+        self.leverage = leverage
+        self.margin_requirement = margin_requirement
         
         self.current_step = 0
         self.current_position = None
         self.daily_loss = 0
         self.last_trade_day = None
         self.balance = initial_balance
+        self.used_margin = 0
         self.total_trades = 0
         self.winning_trades = 0
         
@@ -59,13 +63,16 @@ class ForexEnv(gym.Env):
         self.last_trade_day = None
         self.total_trades = 0
         self.winning_trades = 0
+        self.used_margin = 0
         
         obs = self._get_observation()
         info = {
             'balance': self.balance,
             'position': None,
             'total_trades': 0,
-            'winning_trades': 0
+            'winning_trades': 0,
+            'used_margin': self.used_margin,
+            'free_margin': self.balance - self.used_margin
         }
         
         return obs, info
@@ -90,10 +97,23 @@ class ForexEnv(gym.Env):
             'execution_price': None,
             'trade_profit': 0,
             'balance': self.balance,
+            'used_margin': self.used_margin,
+            'free_margin': self.balance - self.used_margin,
             'total_trades': self.total_trades,
             'winning_trades': self.winning_trades,
             'daily_loss': self.daily_loss
         }
+        
+        # Calculate required margin for new position
+        position_size = self.lot_size * 100000  # Convert lot size to units
+        required_margin = position_size * self.margin_requirement
+        
+        # Check if we have enough free margin for new position
+        if action != 0 and self.current_position is None:
+            if required_margin > (self.balance - self.used_margin):
+                # Not enough margin, force hold
+                action = 0
+                info['trade_type'] = 'margin_call'
         
         # Check if daily loss limit is reached
         if self.daily_loss <= -self.max_daily_loss:
@@ -162,6 +182,7 @@ class ForexEnv(gym.Env):
                     'entry_price': current_price,
                     'entry_step': self.current_step
                 }
+                self.used_margin += required_margin
                 info['trade_executed'] = True
                 info['trade_type'] = 'buy'
                 info['execution_price'] = current_price
@@ -171,6 +192,7 @@ class ForexEnv(gym.Env):
                     'entry_price': current_price,
                     'entry_step': self.current_step
                 }
+                self.used_margin += required_margin
                 info['trade_executed'] = True
                 info['trade_type'] = 'sell'
                 info['execution_price'] = current_price
@@ -231,6 +253,11 @@ class ForexEnv(gym.Env):
             
             # Extra penalty if approaching daily loss limit
             if self.daily_loss < -self.max_daily_loss * 0.7:  # Warning at 70% of max daily loss
+                reward *= 1.3
+            
+            # Extra penalty if approaching margin call (less than 30% free margin)
+            free_margin_ratio = (self.balance - self.used_margin) / self.balance
+            if free_margin_ratio < 0.3:
                 reward *= 1.3
         
         # Penalize for trading in high spread conditions

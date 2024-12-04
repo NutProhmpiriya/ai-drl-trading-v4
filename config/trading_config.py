@@ -10,6 +10,8 @@ TRADING_PARAMS = {
     'timeframe': '5',  # 5-minute timeframe
     'initial_balance': 10000,
     'lot_size': 0.1,
+    'leverage': 100,  # เพิ่มเลเวอเรจ 1:100
+    'margin_requirement': 0.01,  # 1% margin requirement (100:1 leverage)
     'max_positions': 1,
     'stop_loss_pips': 50,  # เพิ่ม stop loss เพื่อให้มีพื้นที่ในการทำกำไรมากขึ้น
     'take_profit_pips': 100,  # เพิ่ม take profit เพื่อให้คุ้มค่ากับความเสี่ยง
